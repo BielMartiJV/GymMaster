@@ -25,7 +25,8 @@ export function requireAuth(req, res, next) {
  * Ha d'anar SEMPRE després de requireAuth.
  */
 export function requireAdmin(req, res, next) {
-  if (!req.user || req.user.rol !== 'admin') {
+  const isAdmin = req.user?.rol === 'admin' || req.user?.userType === 'admin' || req.user?.isAdmin === true;
+  if (!isAdmin) {
     return next({ status: 403, message: 'Accés restringit. Només administradors.' });
   }
   next();

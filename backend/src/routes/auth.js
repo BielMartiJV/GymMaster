@@ -6,62 +6,70 @@ import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
-// ─────────────────────────────────────────────
-// POST /api/auth/register — Registrar nou soci
-// ─────────────────────────────────────────────
+function signToken(user) {
+  return jwt.sign(user, process.env.JWT_SECRET, { expiresIn: '7d' });
+}
+
 router.post('/register', async (req, res, next) => {
   try {
-    const { nom, cognoms, email, password, data_naixement } = req.body;
+    const { nom, cognoms, email, password, telefon, data_naixement, dni } = req.body;
 
-    // Validació bàsica
     if (!nom || !cognoms || !email || !password || !data_naixement) {
-      return next({ status: 400, message: 'Tots els camps són obligatoris: nom, cognoms, email, password, data_naixement.' });
+      return next({ status: 400, message: 'Tots els camps obligatoris han estat informats incorrectament.' });
     }
+
     if (password.length < 6) {
-      return next({ status: 400, message: 'La contrasenya ha de tenir mínim 6 caràcters.' });
+      return next({ status: 400, message: 'La contrasenya ha de tenir minim 6 caracters.' });
     }
 
-    // Comprovar si l'email ja existeix
-    const [existing] = await pool.query(
-      'SELECT id_soci FROM soci WHERE email = ?',
-      [email.trim().toLowerCase()]
-    );
-    if (existing.length > 0) {
-      return next({ status: 409, message: 'Aquest email ja està registrat.' });
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedDni = (dni || 'PENDENT').trim().toUpperCase();
+
+    const [existingEmail] = await pool.execute('SELECT id_soci FROM soci WHERE email = ?', [normalizedEmail]);
+    if (existingEmail.length > 0) {
+      return next({ status: 409, message: 'Aquest email ja esta registrat.' });
     }
 
-    // Hash de la contrasenya
-    const password_hash = await bcrypt.hash(password, 10);
+    if (normalizedDni && normalizedDni !== 'PENDENT') {
+      const [existingDni] = await pool.execute('SELECT id_soci FROM soci WHERE dni = ?', [normalizedDni]);
+      if (existingDni.length > 0) {
+        return next({ status: 409, message: 'Aquest DNI ja esta registrat.' });
+      }
+    }
 
-    // Inserir nou soci
-    const [result] = await pool.query(
-      `INSERT INTO soci (nom, cognoms, email, password_hash, data_naixement, data_alta, actiu)
-       VALUES (?, ?, ?, ?, ?, CURDATE(), 1)`,
-      [nom.trim(), cognoms.trim(), email.trim().toLowerCase(), password_hash, data_naixement]
+    const passwordHash = await bcrypt.hash(password, 10);
+    const [result] = await pool.execute(
+      `INSERT INTO soci
+       (nom, cognoms, email, password_hash, telefon, data_naixement, dni, data_alta, actiu)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), 1)`,
+      [nom.trim(), cognoms.trim(), normalizedEmail, passwordHash, (telefon || '').trim(), data_naixement, normalizedDni]
     );
 
-    const id_soci = result.insertId;
-
-    // Generar JWT
-    const token = jwt.sign(
-      { id: id_soci, email: email.trim().toLowerCase(), rol: 'soci' },
-      process.env.JWT_SECRET,
-      { expiresIn: '7d' }
-    );
+    const tokenPayload = {
+      id: result.insertId,
+      email: normalizedEmail,
+      rol: 'soci',
+      userType: 'soci',
+      isAdmin: false,
+    };
 
     res.status(201).json({
       ok: true,
-      token,
-      user: { id: id_soci, nom, cognoms, email: email.trim().toLowerCase(), rol: 'soci' },
+      token: signToken(tokenPayload),
+      user: {
+        ...tokenPayload,
+        nom: nom.trim(),
+        name: nom.trim(),
+        cognoms: cognoms.trim(),
+        telefon: (telefon || '').trim(),
+        dni: normalizedDni,
+      },
     });
   } catch (err) {
     next(err);
   }
 });
 
-// ─────────────────────────────────────────────
-// POST /api/auth/login — Login soci o admin
-// ─────────────────────────────────────────────
 router.post('/login', async (req, res, next) => {
   try {
     const { email, password } = req.body;
@@ -72,89 +80,138 @@ router.post('/login', async (req, res, next) => {
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Buscar primer a SOCI
-    const [socis] = await pool.query(
-      'SELECT id_soci AS id, nom, cognoms, email, password_hash, actiu FROM soci WHERE email = ?',
-      [normalizedEmail]
-    );
-
-    if (socis.length > 0) {
-      const soci = socis[0];
-      if (!soci.actiu) {
-        return next({ status: 403, message: 'El compte de soci està desactivat.' });
-      }
-      const valid = await bcrypt.compare(password, soci.password_hash);
-      if (!valid) {
-        return next({ status: 401, message: 'Credencials incorrectes.' });
-      }
-      const token = jwt.sign(
-        { id: soci.id, email: soci.email, rol: 'soci' },
-        process.env.JWT_SECRET,
-        { expiresIn: '7d' }
-      );
-      return res.json({
-        ok: true,
-        token,
-        user: { id: soci.id, nom: soci.nom, cognoms: soci.cognoms, email: soci.email, rol: 'soci' },
-      });
-    }
-
-    // Si no és soci, buscar a ADMINISTRADOR
-    const [admins] = await pool.query(
-      'SELECT id_admin AS id, nom, cognoms, email, password_hash, actiu FROM administrador WHERE email = ?',
+    const [admins] = await pool.execute(
+      'SELECT id_admin AS id, nom, cognoms, email, telefon, password_hash, rol, actiu FROM administrador WHERE email = ? LIMIT 1',
       [normalizedEmail]
     );
 
     if (admins.length > 0) {
       const admin = admins[0];
       if (!admin.actiu) {
-        return next({ status: 403, message: 'El compte d\'administrador està desactivat.' });
+        return next({ status: 403, message: "El compte d'administrador esta desactivat." });
       }
+
       const valid = await bcrypt.compare(password, admin.password_hash);
-      if (!valid) {
-        return next({ status: 401, message: 'Credencials incorrectes.' });
+      if (valid) {
+        const tokenPayload = {
+          id: admin.id,
+          email: admin.email,
+          rol: admin.rol || 'admin',
+          userType: 'admin',
+          isAdmin: true,
+        };
+
+        return res.json({
+          ok: true,
+          token: signToken(tokenPayload),
+          user: {
+            ...tokenPayload,
+            nom: admin.nom,
+            name: admin.nom,
+            cognoms: admin.cognoms,
+            telefon: admin.telefon,
+          },
+        });
       }
-      const token = jwt.sign(
-        { id: admin.id, email: admin.email, rol: 'admin' },
-        process.env.JWT_SECRET,
-        { expiresIn: '7d' }
-      );
-      return res.json({
-        ok: true,
-        token,
-        user: { id: admin.id, nom: admin.nom, cognoms: admin.cognoms, email: admin.email, rol: 'admin' },
-      });
     }
 
-    // No existeix cap usuari amb aquest email
-    return next({ status: 401, message: 'Credencials incorrectes.' });
+    const [socis] = await pool.execute(
+      'SELECT id_soci AS id, nom, cognoms, email, telefon, dni, password_hash, actiu FROM soci WHERE email = ? LIMIT 1',
+      [normalizedEmail]
+    );
+
+    if (socis.length === 0) {
+      return next({ status: 401, message: 'Credencials incorrectes.' });
+    }
+
+    const soci = socis[0];
+    if (!soci.actiu) {
+      return next({ status: 403, message: 'El compte de soci esta desactivat.' });
+    }
+
+    const valid = await bcrypt.compare(password, soci.password_hash);
+    if (!valid) {
+      return next({ status: 401, message: 'Credencials incorrectes.' });
+    }
+
+    const tokenPayload = {
+      id: soci.id,
+      email: soci.email,
+      rol: 'soci',
+      userType: 'soci',
+      isAdmin: false,
+    };
+
+    res.json({
+      ok: true,
+      token: signToken(tokenPayload),
+      user: {
+        ...tokenPayload,
+        nom: soci.nom,
+        name: soci.nom,
+        cognoms: soci.cognoms,
+        telefon: soci.telefon,
+        dni: soci.dni,
+      },
+    });
   } catch (err) {
     next(err);
   }
 });
 
-// ─────────────────────────────────────────────
-// GET /api/auth/me — Dades de la sessió actual
-// ─────────────────────────────────────────────
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const { id, rol } = req.user;
+    const isAdmin = req.user.rol === 'admin' || req.user.userType === 'admin' || req.user.isAdmin === true;
 
-    if (rol === 'admin') {
-      const [rows] = await pool.query(
-        'SELECT id_admin AS id, nom, cognoms, email, rol, data_alta FROM administrador WHERE id_admin = ?',
-        [id]
+    if (isAdmin) {
+      const [rows] = await pool.execute(
+        'SELECT id_admin AS id, nom, cognoms, email, telefon, rol, data_alta AS created_at, actiu FROM administrador WHERE id_admin = ?',
+        [req.user.id]
       );
-      if (rows.length === 0) return next({ status: 404, message: 'Usuari no trobat.' });
-      return res.json({ ok: true, user: { ...rows[0], rol: 'admin' } });
+
+      if (rows.length === 0) {
+        return next({ status: 404, message: 'Usuari no trobat.' });
+      }
+
+      const admin = rows[0];
+      if (!admin.actiu) {
+        return next({ status: 403, message: "El compte d'administrador esta desactivat." });
+      }
+
+      return res.json({
+        ok: true,
+        user: {
+          ...admin,
+          name: admin.nom,
+          rol: admin.rol || 'admin',
+          userType: 'admin',
+          isAdmin: true,
+        },
+      });
     }
 
-    const [rows] = await pool.query(
-      'SELECT id_soci AS id, nom, cognoms, email, telefon, data_naixement, data_alta FROM soci WHERE id_soci = ? AND actiu = 1',
-      [id]
+    const [rows] = await pool.execute(
+      `SELECT id_soci AS id, nom, cognoms, email, telefon, data_naixement, dni, data_alta AS created_at
+       FROM soci
+       WHERE id_soci = ? AND actiu = 1`,
+      [req.user.id]
     );
-    if (rows.length === 0) return next({ status: 404, message: 'Soci no trobat.' });
-    res.json({ ok: true, user: { ...rows[0], rol: 'soci' } });
+
+    if (rows.length === 0) {
+      return next({ status: 404, message: 'Soci no trobat.' });
+    }
+
+    const soci = rows[0];
+    res.json({
+      ok: true,
+      user: {
+        ...soci,
+        name: soci.nom,
+        rol: 'soci',
+        userType: 'soci',
+        isAdmin: false,
+      },
+    });
   } catch (err) {
     next(err);
   }
