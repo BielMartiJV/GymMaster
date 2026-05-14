@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { cn } from "./ui/utils";
 import { NotificationBell } from "./notifications/NotificationBell";
+import { DownloadApp } from "./DownloadApp";
+
 
 export function Root() {
   const location = useLocation();
@@ -203,6 +205,7 @@ export function Root() {
           </div>
         </div>
       </footer>
+      <DownloadApp />
     </div>
   );
 }
