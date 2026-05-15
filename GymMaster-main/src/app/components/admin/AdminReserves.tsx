@@ -1,5 +1,5 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Check, Edit2, Plus, Trash2, X } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { Check, Edit2, Trash2, X } from "lucide-react";
 import { fetchApi, getAuthHeaders } from "./api";
 
 type SociOption = {
@@ -53,7 +53,7 @@ export function AdminReserves() {
     setEditing(null);
   };
 
-  const loadData = async () => {
+  const loadData = useCallback(async (showAlertOnError = true) => {
     try {
       const [reservesResponse, socisResponse, classesResponse] = await Promise.all([
         fetchApi("/reserves", { headers: getAuthHeaders() }),
@@ -74,15 +74,23 @@ export function AdminReserves() {
       setClasses(classesData.classes || []);
     } catch (error) {
       console.error(error);
-      alert("No s'han pogut carregar les dades de reserves");
+      if (showAlertOnError) {
+        alert("No s'han pogut carregar les dades de reserves");
+      }
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    loadData();
-  }, []);
+    loadData(true);
+
+    const refreshInterval = window.setInterval(() => {
+      loadData(false);
+    }, 5000);
+
+    return () => window.clearInterval(refreshInterval);
+  }, [loadData]);
 
   const openModal = (reserva?: Reserva) => {
     if (reserva) {
@@ -174,13 +182,6 @@ export function AdminReserves() {
           <h2 className="text-2xl font-bold text-slate-900">Gestio de reserves</h2>
           <p className="text-slate-600">Control d'assistencia i altes de noves reserves.</p>
         </div>
-        <button
-          onClick={() => openModal()}
-          className="inline-flex items-center gap-2 bg-sky-600 text-white px-4 py-2 rounded-lg font-semibold hover:bg-sky-700"
-        >
-          <Plus className="w-4 h-4" />
-          Nova reserva
-        </button>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">

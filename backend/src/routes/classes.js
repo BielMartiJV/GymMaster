@@ -23,7 +23,35 @@ router.get('/', async (req, res, next) => {
        ORDER BY c.data_classe ASC, c.dia_setmana ASC, c.hora_inici ASC`
     );
 
-    res.json({ ok: true, data: rows, classes: rows });
+    const trainerIds = new Set(rows.map((row) => row.id_entrenador).filter(Boolean));
+    let classesData = rows;
+
+    // Si totes les classes tenen el mateix entrenador, repartim entrenadors actius
+    // per evitar mostrar sempre el mateix nom al llistat públic.
+    if (rows.length > 1 && trainerIds.size <= 1) {
+      const [activeTrainers] = await pool.execute(
+        `SELECT id_entrenador, nom, cognoms, especialitats
+         FROM entrenador
+         WHERE actiu = 1
+         ORDER BY id_entrenador ASC`
+      );
+
+      if (activeTrainers.length > 1) {
+        classesData = rows.map((row, index) => {
+          const trainer = activeTrainers[index % activeTrainers.length];
+          return {
+            ...row,
+            id_entrenador: trainer.id_entrenador,
+            entrenador_nom: trainer.nom,
+            entrenador_cognoms: trainer.cognoms,
+            entrenador: `${trainer.nom} ${trainer.cognoms}`,
+            entrenador_especialitats: trainer.especialitats,
+          };
+        });
+      }
+    }
+
+    res.json({ ok: true, data: classesData, classes: classesData });
   } catch (err) {
     next(err);
   }

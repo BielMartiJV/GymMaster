@@ -42,7 +42,7 @@ export function Pricing() {
         "Tot l'inclòs al Premium",
         "4 sessions de personal training/mes",
         "Pla d'entrenament personalitzat",
-        "Assessorament nutricional bàsic",
+        "Assessorament nutricional",
         "Prioritat en reserva de classes",
       ],
       cta: "Vull Elite",
